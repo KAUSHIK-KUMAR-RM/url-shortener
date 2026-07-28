@@ -1,32 +1,59 @@
 import os
 import secrets
 import traceback
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 import mysql.connector
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, HttpUrl
 
-# Load environment variables from .env file
+# Loads local .env file when running on your computer.
+# On Railway, system environment variables take precedence automatically.
 load_dotenv()
 
 app = FastAPI(title="MySQL URL Shortener API")
 
-# Updated MySQL Configuration to read Railway's default variable names directly
-MYSQL_CONFIG = {
-    "host": os.getenv("MYSQLHOST") or os.getenv("DB_HOST", "localhost"),
-    "user": os.getenv("MYSQLUSER") or os.getenv("DB_USER", "root"),
-    "password": os.getenv("MYSQLPASSWORD") or os.getenv("DB_PASSWORD", ""),
-    "database": os.getenv("MYSQLDATABASE") or os.getenv("DB_NAME", "url_shortener_db"),
-    "port": int(os.getenv("MYSQLPORT") or os.getenv("DB_PORT", 3306)),
-}
+
+def get_env(key: str, default: str = "") -> str:
+    """Helper to read non-empty environment variables."""
+    val = os.getenv(key)
+    return val.strip() if val and val.strip() else default
 
 
 def get_db_connection():
-    """Returns a new MySQL database connection using env configurations."""
+    """Dynamically connects to MySQL (Railway production or Local development)."""
+    # 1. Try Railway's auto-generated connection string first
+    mysql_url = get_env("MYSQL_URL") or get_env("MYSQL_PUBLIC_URL")
+
+    if mysql_url:
+        try:
+            url = urlparse(mysql_url)
+            return mysql.connector.connect(
+                host=url.hostname,
+                user=url.username,
+                password=url.password,
+                database=url.path.lstrip("/"),
+                port=url.port or 3306,
+            )
+        except Exception as e:
+            print(f"MYSQL_URL connection failed, falling back: {e}", flush=True)
+
+    # 2. Fall back to individual variables (.env locally or discrete Railway vars)
+    host = get_env("MYSQLHOST") or get_env("DB_HOST", "localhost")
+    user = get_env("MYSQLUSER") or get_env("DB_USER", "root")
+    password = get_env("MYSQLPASSWORD") or get_env("DB_PASSWORD", "")
+    database = get_env("MYSQLDATABASE") or get_env("DB_NAME", "url_shortener_db")
+    port = int(get_env("MYSQLPORT") or get_env("DB_PORT", "3306"))
+
     try:
-        connection = mysql.connector.connect(**MYSQL_CONFIG)
-        return connection
+        return mysql.connector.connect(
+            host=host,
+            user=user,
+            password=password,
+            database=database,
+            port=port,
+        )
     except mysql.connector.Error as err:
         print(f"DATABASE CONNECTION ERROR: {err}", flush=True)
         raise HTTPException(
@@ -51,7 +78,7 @@ def generate_short_code(length: int = 6) -> str:
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
-    """Prevents browsers from triggering 500 errors when requesting favicon."""
+    """Prevents browser favicon requests from clogging logs."""
     return Response(status_code=204)
 
 
@@ -174,10 +201,7 @@ def serve_frontend():
 
 @app.post("/shorten", response_model=URLResponse, status_code=201)
 def shorten_url(payload: URLRequest, request: Request):
-    """
-    Accepts a long URL, saves it to MySQL, and returns the short code.
-    Dynamically generates the base URL based on the request host.
-    """
+    """Accepts a long URL, saves it to MySQL, and returns the short code."""
     base_url = str(request.base_url).rstrip("/")
     original_url_str = str(payload.url)
 
@@ -185,7 +209,6 @@ def shorten_url(payload: URLRequest, request: Request):
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # 1. Check if original URL already exists in MySQL
         select_query = "SELECT short_code FROM urls WHERE original_url = %s"
         cursor.execute(select_query, (original_url_str,))
         existing_record = cursor.fetchone()
@@ -200,7 +223,6 @@ def shorten_url(payload: URLRequest, request: Request):
                 "original_url": original_url_str,
             }
 
-        # 2. Generate unique key not present in MySQL
         while True:
             code = generate_short_code()
             check_query = "SELECT id FROM urls WHERE short_code = %s"
@@ -208,10 +230,7 @@ def shorten_url(payload: URLRequest, request: Request):
             if not cursor.fetchone():
                 break
 
-        # 3. Save new mapping to MySQL
-        insert_query = (
-            "INSERT INTO urls (short_code, original_url) VALUES (%s, %s)"
-        )
+        insert_query = "INSERT INTO urls (short_code, original_url) VALUES (%s, %s)"
         cursor.execute(insert_query, (code, original_url_str))
         conn.commit()
 
@@ -231,16 +250,12 @@ def shorten_url(payload: URLRequest, request: Request):
 
 @app.get("/{short_code}")
 def redirect_to_url(short_code: str):
-    """
-    Fetches the original URL from MySQL and redirects the user.
-    """
+    """Fetches original URL from MySQL and redirects the user."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        select_query = (
-            "SELECT original_url FROM urls WHERE short_code = %s"
-        )
+        select_query = "SELECT original_url FROM urls WHERE short_code = %s"
         cursor.execute(select_query, (short_code,))
         record = cursor.fetchone()
 
