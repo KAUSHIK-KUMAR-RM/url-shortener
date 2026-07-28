@@ -1,5 +1,6 @@
 import os
 import secrets
+from urllib import request
 from dotenv import load_dotenv
 import mysql.connector
 from fastapi import FastAPI, HTTPException
@@ -167,6 +168,7 @@ def shorten_url(payload: URLRequest):
     """
     Accepts a long URL, saves it to MySQL, and returns the short code.
     """
+    base_url = str(request.base_url).rstrip("/")
     original_url_str = str(payload.url)
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -181,7 +183,7 @@ def shorten_url(payload: URLRequest):
             code = existing_record["short_code"]
             return {
                 "short_code": code,
-                "short_url": f"http://localhost:8000/{code}",
+                "short_url": f"{base_url}/{code}",
                 "original_url": original_url_str,
             }
 
