@@ -1,8 +1,9 @@
 import os
 import secrets
+import traceback
 from dotenv import load_dotenv
 import mysql.connector
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, HttpUrl
 
@@ -27,6 +28,7 @@ def get_db_connection():
         connection = mysql.connector.connect(**MYSQL_CONFIG)
         return connection
     except mysql.connector.Error as err:
+        print(f"DATABASE CONNECTION ERROR: {err}", flush=True)
         raise HTTPException(
             status_code=500, detail=f"Database Connection Error: {err}"
         )
@@ -45,6 +47,12 @@ class URLResponse(BaseModel):
 def generate_short_code(length: int = 6) -> str:
     """Generates a URL-safe random string."""
     return secrets.token_urlsafe(length)[:length]
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Prevents browsers from triggering 500 errors when requesting favicon."""
+    return Response(status_code=204)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -145,7 +153,8 @@ def serve_frontend():
                     });
 
                     if (!response.ok) {
-                        throw new Error('Please enter a valid URL');
+                        const errorData = await response.json();
+                        throw new Error(errorData.detail || 'Failed to shorten URL');
                     }
 
                     const data = await response.json();
@@ -171,10 +180,11 @@ def shorten_url(payload: URLRequest, request: Request):
     """
     base_url = str(request.base_url).rstrip("/")
     original_url_str = str(payload.url)
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
 
     try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
         # 1. Check if original URL already exists in MySQL
         select_query = "SELECT short_code FROM urls WHERE original_url = %s"
         cursor.execute(select_query, (original_url_str,))
@@ -182,6 +192,8 @@ def shorten_url(payload: URLRequest, request: Request):
 
         if existing_record:
             code = existing_record["short_code"]
+            cursor.close()
+            conn.close()
             return {
                 "short_code": code,
                 "short_url": f"{base_url}/{code}",
@@ -203,15 +215,18 @@ def shorten_url(payload: URLRequest, request: Request):
         cursor.execute(insert_query, (code, original_url_str))
         conn.commit()
 
+        cursor.close()
+        conn.close()
+
         return {
             "short_code": code,
             "short_url": f"{base_url}/{code}",
             "original_url": original_url_str,
         }
 
-    finally:
-        cursor.close()
-        conn.close()
+    except Exception as e:
+        print("EXACT SHORTEN ERROR:", traceback.format_exc(), flush=True)
+        raise HTTPException(status_code=500, detail=f"Server Error: {str(e)}")
 
 
 @app.get("/{short_code}")
@@ -219,21 +234,26 @@ def redirect_to_url(short_code: str):
     """
     Fetches the original URL from MySQL and redirects the user.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
     try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
         select_query = (
             "SELECT original_url FROM urls WHERE short_code = %s"
         )
         cursor.execute(select_query, (short_code,))
         record = cursor.fetchone()
 
+        cursor.close()
+        conn.close()
+
         if not record:
             raise HTTPException(status_code=404, detail="Short URL not found")
 
         return RedirectResponse(url=record["original_url"], status_code=307)
 
-    finally:
-        cursor.close()
-        conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("EXACT REDIRECT ERROR:", traceback.format_exc(), flush=True)
+        raise HTTPException(status_code=500, detail=f"Server Error: {str(e)}")
