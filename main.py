@@ -1,9 +1,8 @@
 import os
 import secrets
-from urllib import request
 from dotenv import load_dotenv
 import mysql.connector
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, HttpUrl
 
@@ -12,7 +11,7 @@ load_dotenv()
 
 app = FastAPI(title="MySQL URL Shortener API")
 
-# MySQL Configuration
+# MySQL Configuration read from Railway Environment Variables
 MYSQL_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
     "user": os.getenv("DB_USER", "root"),
@@ -165,9 +164,10 @@ def serve_frontend():
 
 
 @app.post("/shorten", response_model=URLResponse, status_code=201)
-def shorten_url(payload: URLRequest):
+def shorten_url(payload: URLRequest, request: Request):
     """
     Accepts a long URL, saves it to MySQL, and returns the short code.
+    Dynamically generates the base URL based on the request host.
     """
     base_url = str(request.base_url).rstrip("/")
     original_url_str = str(payload.url)
@@ -205,7 +205,7 @@ def shorten_url(payload: URLRequest):
 
         return {
             "short_code": code,
-            "short_url": f"http://localhost:8000/{code}",
+            "short_url": f"{base_url}/{code}",
             "original_url": original_url_str,
         }
 
