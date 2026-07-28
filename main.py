@@ -12,13 +12,13 @@ load_dotenv()
 
 app = FastAPI(title="MySQL URL Shortener API")
 
-# MySQL Configuration read from Railway Environment Variables
+# Updated MySQL Configuration to read Railway's default variable names directly
 MYSQL_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", ""),
-    "database": os.getenv("DB_NAME", "url_shortener_db"),
-    "port": int(os.getenv("DB_PORT", 3306)),
+    "host": os.getenv("MYSQLHOST") or os.getenv("DB_HOST", "localhost"),
+    "user": os.getenv("MYSQLUSER") or os.getenv("DB_USER", "root"),
+    "password": os.getenv("MYSQLPASSWORD") or os.getenv("DB_PASSWORD", ""),
+    "database": os.getenv("MYSQLDATABASE") or os.getenv("DB_NAME", "url_shortener_db"),
+    "port": int(os.getenv("MYSQLPORT") or os.getenv("DB_PORT", 3306)),
 }
 
 
